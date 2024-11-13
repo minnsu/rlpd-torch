@@ -1,0 +1,13 @@
+{
+    "offline_path": "./dataset/preprocessed/20241113.pkl",
+
+    "ckpt_dir": "./checkpoints",
+    "ckpt_period": 1000,
+    
+    "seed": 0,
+
+    "buffer_size": 10000,
+    "max_steps": 10000,
+    "batch_size": 32,
+    "start_training_after": 100
+}
