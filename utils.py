@@ -7,6 +7,8 @@ from datetime import datetime
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
+import gym
+import matplotlib.pyplot as plt
 
 def preprocess(raw_path: str, data_path: str, _preprocess) -> dict:
     """
@@ -30,14 +32,10 @@ def preprocess(raw_path: str, data_path: str, _preprocess) -> dict:
     Returns:
         None
     """
-    # create the data_path if it does not exist
-    if not os.path.exists(data_path):
-        os.makedirs(data_path)
-    
     preprocessed_data = _preprocess(raw_path, data_path)
     
     # store the preprocessed data
-    with open(os.path.join(data_path, f'{datetime.today()}.pkl'), 'wb') as f:
+    with open(data_path, 'wb') as f:
         pkl.dump(preprocessed_data, f)
 
     return None
@@ -52,9 +50,10 @@ def load_data(data_path: str) -> list[dict]:
     Returns:
         data (list[dict]): each dict corresponds to a episode of the raw data.
     """
+    print(f'Load data: {data_path}... ', end='', flush=True)
     with open(data_path, 'rb') as f:
         data = pkl.load(f)
-    
+    print('Done!')
     return data
 
 def convert_to_transition(data: list[dict]) -> dict:
@@ -67,35 +66,35 @@ def convert_to_transition(data: list[dict]) -> dict:
     Returns:
         transitions (dict): The transitions.
     """
+    print(f'Convert to transitions... ', end='', flush=True)
     transitions = {
         'observations': {
-            'images': torch.Tensor(),
-            'states': torch.Tensor(),
+            'images': torch.Tensor(
+                torch.cat([episode['images'][:-1] for episode in data], dim=0)
+            ),
+            'states': torch.Tensor(
+                torch.cat([episode['states'][:-1] for episode in data], dim=0)
+            ),
         },
         'next_observations': {
-            'images': torch.Tensor(),
-            'states': torch.Tensor(),
+            'images': torch.Tensor(
+                torch.cat([episode['images'][1:] for episode in data], dim=0)
+            ),
+            'states': torch.Tensor(
+                torch.cat([episode['states'][1:] for episode in data], dim=0)
+            ),
         },
-        'actions': torch.Tensor(),
-        'rewards': torch.Tensor(),    
-        'dones': torch.Tensor(),
+        'actions': torch.Tensor(
+            torch.cat([episode['actions'] for episode in data], dim=0)
+        ),
+        'rewards': torch.Tensor(
+            torch.cat([episode['rewards'] for episode in data], dim=0)
+        ),    
+        'dones': torch.Tensor(
+            torch.cat([episode['dones'] for episode in data], dim=0)
+        ),
     }
-
-    for episode in data:
-        transitions['observations']['images'] = torch.cat((transitions['observations']['images'],
-                                                           episode['images'][:-1]), dim=0)
-        transitions['observations']['states'] = torch.cat((transitions['observations']['states'],
-                                                           episode['states'][:-1]), dim=0)
-        
-        transitions['next_observations']['images'] = torch.cat((transitions['next_observations']['images'],
-                                                                episode['images'][1:]), dim=0)
-        transitions['next_observations']['states'] = torch.cat((transitions['next_observations']['states'],
-                                                                episode['states'][1:]), dim=0)
-        
-        transitions['actions'] = torch.cat((transitions['actions'], episode['actions']), dim=0)
-        transitions['rewards'] = torch.cat((transitions['rewards'], episode['rewards']), dim=0)
-        transitions['dones'] = torch.cat((transitions['dones'], episode['dones']), dim=0)
-
+    print('Done!')
     return transitions
 
 def sample_batch(data: dict, batch_size: int) -> dict:
@@ -120,9 +119,9 @@ def sample_batch(data: dict, batch_size: int) -> dict:
             'images': data['next_observations']['images'][indices],
             'states': data['next_observations']['states'][indices],
         },
-        'actions': data['actions'][indices],
-        'rewards': data['rewards'][indices],
-        'dones': data['dones'][indices],
+        'actions': data['actions'][indices].unsqueeze(-1),
+        'rewards': data['rewards'][indices].unsqueeze(-1),
+        'dones': data['dones'][indices].unsqueeze(-1),
     }
 
     return batch
@@ -154,6 +153,28 @@ def combine_batch(demo_batch: dict, online_batch: dict) -> dict:
 
     return batch
 
+def batch_to_gpu(batch: dict, device) -> dict:
+    """
+    Move the batch to GPU.
+
+    Args:
+        batch (dict): The batch.
+
+    Returns:
+        batch (dict): The batch on GPU.
+    """
+    if device == 'cpu':
+        return batch
+
+    for k, v in batch.items():
+        if isinstance(v, dict):
+            for kk, vv in v.items():
+                batch[k][kk] = vv.to(device)
+        else:
+            batch[k] = v.to(device)
+    
+    return batch
+
 buffer_size = None
 def default_replay_buffer(demo_data: dict, config: dict) -> dict:
     """
@@ -178,9 +199,9 @@ def default_replay_buffer(demo_data: dict, config: dict) -> dict:
             'images': torch.zeros(config['buffer_size'], *demo_data['observations']['images'].shape[1:]),
             'states': torch.zeros(config['buffer_size'], *demo_data['observations']['states'].shape[1:]),
         },
-        'actions': torch.zeros(config['buffer_size'], *demo_data['observations']['actions'].shape[1:]),
-        'rewards': torch.zeros(config['buffer_size'], *demo_data['observations']['rewards'].shape[1:]),
-        'dones': torch.zeros(config['buffer_size'], *demo_data['observations']['dones'].shape[1:]),
+        'actions': torch.zeros(config['buffer_size'], *demo_data['actions'].shape[1:]),
+        'rewards': torch.zeros(config['buffer_size'], *demo_data['rewards'].shape[1:]),
+        'dones': torch.zeros(config['buffer_size'], *demo_data['dones'].shape[1:]),
     }
 
     return replay_buffer
@@ -205,3 +226,45 @@ def add_to_replay_buffer(replay_buffer: dict, buffer_idx: int, obs, action, rewa
 
     global buffer_size
     return (buffer_idx + 1) % buffer_size
+
+def sim_evaluation(env: gym.Env, agent, device: str) -> float:
+    """
+    Evaluate the agent in the environment.
+
+    Args:
+        env (gym.Env): The environment.
+        agent (nn.Module): The agent.
+        device (str): The device.
+
+    Returns:
+        total_reward (float): The total reward.
+    """
+    obs, done = env.reset(), False
+    total_reward = 0
+    ts = 0
+
+    img = env.render(mode='rgb_array')
+    obs = {
+        'images': torch.FloatTensor(img.transpose(2, 0, 1)).unsqueeze(0).to(device),
+        'states': torch.FloatTensor(obs).to(device),
+    }
+
+    while not done:
+        action = agent(obs)
+        action = 1 if action > 0 else 0
+
+        next_obs, reward, done, _ = env.step(action)
+        
+        img = env.render(mode='rgb_array')
+        next_obs = {
+            'images': torch.FloatTensor(img.transpose(2, 0, 1)).unsqueeze(0).to(device),
+            'states': torch.FloatTensor(next_obs).to(device),
+        }
+        
+        total_reward += reward
+        obs = next_obs
+        ts += 1
+    
+    print(f'Total reward: {total_reward}, ts: {ts}')
+
+    return total_reward

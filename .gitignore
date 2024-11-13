@@ -1,2 +1,6 @@
+**/__pycache__/
 .env/
+checkpoints/
+dataset/
+test/
 flax_sac.py

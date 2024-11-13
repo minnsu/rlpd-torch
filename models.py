@@ -24,19 +24,23 @@ class Actor(nn.Module):
         x = self.layer_norm(x)
         mean = self.mean_head(x)
         std = self.std_head(x)
-        
+        std = F.softplus(std) + 1e-5
         return mean, std
 
 class Critic(nn.Module):
     def __init__(self, state_dim: int, action_dim: int, output_dim: int):
         super(Critic, self).__init__()
+        self.action_hidden_dim = 16
+        self.action_embedder = nn.Linear(action_dim, self.action_hidden_dim)
 
-        self.fc1 = nn.Linear(state_dim + action_dim, 128)
+        self.fc1 = nn.Linear(state_dim + self.action_hidden_dim, 128)
         self.fc2 = nn.Linear(128, 64)
         self.head = nn.Linear(64, output_dim)
 
     def forward(self, embedding, actions):
-        x = torch.cat([embedding, actions], dim=-1)
+        action_embedding = F.relu(self.action_embedder(actions))
+        
+        x = torch.cat((embedding, action_embedding), dim=-1)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.head(x)
@@ -55,7 +59,10 @@ class Temperature(nn.Module):
 class Model(nn.Module):
     def __init__(self, state_dim: int, action_dim: int, output_dim: int):
         super(Model, self).__init__()
-
+        print(f'Model init... ', end='', flush=True)
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.output_dim = output_dim
         self.embed_dim = 128
 
         self.vision_embedder = torchvision.models.resnet18(pretrained=True)
@@ -70,6 +77,7 @@ class Model(nn.Module):
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
         self.temperature_optimizer = torch.optim.Adam(self.temperature.parameters(), lr=3e-4)
+        print('Done!')
 
     def embed_observations(self, observations: dict):
         images = observations['images']
@@ -77,7 +85,7 @@ class Model(nn.Module):
 
         image_embedding = self.vision_embedder(images)
         state_embedding = self.state_embedder(states)
-        embedding = torch.cat([image_embedding, state_embedding], dim=-1)
+        embedding = torch.cat([image_embedding.squeeze(), state_embedding], dim=-1)
 
         return embedding
 
