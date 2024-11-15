@@ -76,7 +76,8 @@ class SACAgent:
         target_q = batch['rewards'] + self.discount * (1 - batch['dones']) * next_q
 
         if self.backup_entropy:
-            next_log_probs = dist.log_prob(next_actions)
+            next_log_probs = dist.log_prob(next_actions).mean()
+            # print(f"[SHAPES] : {target_q.shape} {batch['dones'].shape} {self.model.temperature().shape} {next_log_probs.shape}")
             target_q -= (
                 self.discount
                 * (1 - batch['dones'])
@@ -96,7 +97,7 @@ class SACAgent:
 
         return critic_loss
 
-    def update(self, batch: dict):
+    def update(self, batch: dict):  
         _ = self.update_critic(batch)
         _, entropy = self.update_actor(batch)
         _ = self.update_temperature(entropy)

@@ -1,14 +1,14 @@
 {
-    "offline_path": "./dataset/preprocessed/cartpole-241113.pkl",
+    "offline_path": "../dataset/<demo_data>.pkl",
 
     "ckpt_dir": "./checkpoints",
-    "ckpt_period": 5,
+    "ckpt_period": 10,
     
     "seed": 0,
 
     "buffer_size": 2000,
     "max_steps": 3000,
-    "batch_size": 32,
-    "start_training_after": 100,
+    "batch_size": 16,
+    "start_training_after": 8,
     "update_period": 10
 }

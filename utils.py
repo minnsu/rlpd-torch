@@ -119,9 +119,9 @@ def sample_batch(data: dict, batch_size: int) -> dict:
             'images': data['next_observations']['images'][indices],
             'states': data['next_observations']['states'][indices],
         },
-        'actions': data['actions'][indices].unsqueeze(-1),
-        'rewards': data['rewards'][indices].unsqueeze(-1),
-        'dones': data['dones'][indices].unsqueeze(-1),
+        'actions': data['actions'][indices],
+        'rewards': data['rewards'][indices],
+        'dones': data['dones'][indices],
     }
 
     return batch

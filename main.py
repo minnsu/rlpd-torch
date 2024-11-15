@@ -15,6 +15,9 @@ from utils import sim_evaluation
 from agents import SACAgent
 from models import Model
 
+from env_dependent_utils import env_obs_to_model_obs
+
+
 def main(config: dict):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     torch.manual_seed(config['seed'])
@@ -28,44 +31,41 @@ def main(config: dict):
     buffer_idx = 0
 
     # ================ [ENVIRONMENT] ================
-    env = gym.make('CartPole-v1')
-    env.seed(config['seed'])
+    env = None
 
     # =============== [MODEL & AGENT] ===============
-    model = Model(state_dim=4, action_dim=1, output_dim=1).to(device)
+    model = Model(state_dim=62, action_dim=16, output_dim=1).to(device)
     agent = SACAgent(model=model)
 
     # ================= [TRAINING] ==================
-    obs, done = env.reset(), False
+    obs, _ = env.reset()
+    done = False
     
     # [DEBUGGING] -------------------------------
-    img = env.render(mode='rgb_array')
-    obs = {
-        'images': torch.FloatTensor(img.transpose(2, 0, 1)).unsqueeze(0).to(device),
-        'states': torch.FloatTensor(obs).to(device),
-    }
+    obs = env_obs_to_model_obs(obs, device)
+    train_idx = 0
     prev_ts = 0
     # --------------------------------------------
 
+    mode = 'Acting'
     for ts in range(config['max_steps']):
+        print(f"[{mode}] current timestep: {ts} / {config['max_steps']}", end='\r', flush=True)
         action = agent(obs)
 
+        next_obs, reward, done, _, action = env.step(action.to('cpu'))
+        
         # [DEBUGGING] --------------------------------
-        action = 1 if action > 0 else 0
+        next_obs = env_obs_to_model_obs(next_obs, device)
+        action = torch.tensor(action).clone().detach().to(device)
         # --------------------------------------------
 
-        next_obs, reward, done, _ = env.step(action)
-        # [DEBUGGING] --------------------------------
-        img = env.render(mode='rgb_array')
-        next_obs = {
-            'images': torch.FloatTensor(img.transpose(2, 0, 1)).unsqueeze(0).to(device),
-            'states': torch.FloatTensor(next_obs).to(device),
-        }
-        # --------------------------------------------
         buffer_idx = add_to_replay_buffer(replay_buffer, buffer_idx, obs, action, reward, next_obs, done)
         obs = next_obs
 
         if ts > config["start_training_after"] and ts % config['update_period'] == 0:
+            mode = 'Training'
+            print(f"[{mode}] current train idx: {train_idx}             ", end='\r', flush=True)
+
             offline_batch = sample_batch(offline_data, config['batch_size'] // 2)
             online_batch = sample_batch(replay_buffer, config['batch_size'] // 2)
 
@@ -74,22 +74,18 @@ def main(config: dict):
 
             agent.update(batch)
 
-        if ts == config['ckpt_period']:
-            torch.save(agent.model.state_dict(), os.path.join(config['ckpt_dir'], f"model_{ts}.pth"))
-            # [DEBUGGING] -------------------------------
-            sim_evaluation(env, agent, device)
-            # -------------------------------------------
+            train_idx += 1
+            mode = 'Acting'
 
+        if ts % config['ckpt_period'] == 0:
+            torch.save(agent.model.state_dict(), os.path.join(config['ckpt_dir'], f"model_{ts}.pth"))
 
         if done:
-            obs, done = env.reset(), False
+            obs, _ = env.reset()
+            done = False
             # [DEBUGGING] -------------------------------
             print(f"Episode finished. epi steps: {ts - prev_ts}")
-            img = env.render(mode='rgb_array')
-            obs = {
-                'images': torch.FloatTensor(img.transpose(2, 0, 1)).unsqueeze(0).to(device),
-                'states': torch.FloatTensor(obs).to(device),
-            }
+            obs = env_obs_to_model_obs(obs, device)
             prev_ts = ts
             # --------------------------------------------
 
